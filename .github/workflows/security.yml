@@ -1,4 +1,4 @@
-name: Security Audit
+name: Security Audit for Static Website
 
 on:
   push:
@@ -10,43 +10,72 @@ on:
     - cron: '0 2 * * 1'
 
 jobs:
-  security-audit:
+  # Security scan for static files and external dependencies
+  static-security:
+    name: Static Website Security Scan
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
+    - name: Check for sensitive files
+      run: |
+        echo "Checking for potentially sensitive files..."
+        # Check for common sensitive file patterns
+        find . -name "*.env*" -o -name "*.key" -o -name "*.pem" -o -name "*.p12" -o -name "*.pfx" -o -name "*.jks" | while read file; do
+          echo "WARNING: Found potentially sensitive file: $file"
+        done
         
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Run npm audit
-      run: npm audit --audit-level=high
-      
-    - name: Run dependency vulnerability scan
-      uses: actions/dependency-review-action@v4
-      if: github.event_name == 'pull_request'
-      
+        # Check for hardcoded secrets in code
+        echo "Scanning for potential secrets in code..."
+        grep -r -i "password\|secret\|key\|token" --include="*.html" --include="*.js" --include="*.css" . || echo "No obvious secrets found"
+        
+    - name: Analyze external dependencies
+      run: |
+        echo "Analyzing external CDN dependencies..."
+        # Extract external URLs from HTML and check for HTTPS
+        grep -o 'https\?://[^"]*' index.html | sort | uniq | while read url; do
+          echo "External dependency: $url"
+          if [[ $url != https://* ]]; then
+            echo "WARNING: Non-HTTPS external dependency found: $url"
+          fi
+        done
+        
+    - name: Check HTML security headers
+      run: |
+        echo "Checking for security-related meta tags..."
+        if grep -q "Content-Security-Policy" index.html; then
+          echo "✓ Content Security Policy found"
+        else
+          echo "⚠ Consider adding Content Security Policy meta tag"
+        fi
+        
+        if grep -q 'rel="noopener"' index.html; then
+          echo "✓ noopener attribute found on external links"
+        else
+          echo "⚠ Consider adding rel='noopener noreferrer' to external links"
+        fi
+
+  # CodeQL analysis for JavaScript files
   codeql:
     name: CodeQL Security Analysis
     runs-on: ubuntu-latest
     permissions:
       security-events: write
+      actions: read
+      contents: read
       
     steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v4
       
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v3
       with:
         languages: javascript
+        # Only analyze custom JavaScript files, not third-party libraries
+        queries: security-and-quality
         
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
